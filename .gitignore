@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Comercial Andina - security and generated data
+*.pem
+*.key
+.aws/
+.prefect/
+data/generated/
+data/raw/
+data/quarantine/

@@ -106,7 +106,7 @@ jobs:
       - name: Initialize databases
         run: |
           az containerapp job start \
-            --name "caj-comercial-andina-bootstrap-${{ inputs.environment }}" \
+            --name "caj-ca-bootstrap-${{ inputs.environment }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
 
       - name: Deployment summary

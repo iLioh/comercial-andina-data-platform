@@ -125,6 +125,7 @@ contenedor o una estación autenticada en el mismo workspace:
 
 ```bash
 prefect work-pool create --type process comercial-andina-ecs
+prefect work-pool set-concurrency-limit comercial-andina-ecs 1
 prefect deploy --all
 ```
 

@@ -39,6 +39,7 @@ de negocio; el alcance técnico evaluado comienza en `oltp.ventas_origen`.
 | DW | `dim_fecha`, `dim_producto`, `dim_region`, `fact_ventas` |
 | OLAP | `GROUP BY`, `ROLLUP`, `CUBE`, `GROUPING SETS`, `GROUPING_ID` |
 | Consumo | Power BI Import, KPIs, tres visuales obligatorios y RLS |
+| Orquestación | Prefect con seis tareas observables y reintentos por etapa |
 
 ## Cumplimiento del laboratorio
 

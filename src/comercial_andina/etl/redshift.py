@@ -52,3 +52,34 @@ class RedshiftDataExecutor:
         for statement in sqlparse.split(sql):
             if statement.strip():
                 self.execute(statement)
+
+    def query_one(self, sql: str) -> dict[str, Any] | None:
+        """Execute a query and decode its first row from the Redshift Data API."""
+
+        status = self.execute(sql)
+        if not status.get("HasResultSet"):
+            return None
+        result = self.client.get_statement_result(Id=status["Id"])
+        records = result.get("Records", [])
+        if not records:
+            return None
+        columns = [column["name"] for column in result["ColumnMetadata"]]
+        return {
+            name: self._decode_field(field)
+            for name, field in zip(columns, records[0], strict=True)
+        }
+
+    @staticmethod
+    def _decode_field(field: dict[str, Any]) -> Any:
+        if field.get("isNull"):
+            return None
+        for field_type in (
+            "stringValue",
+            "longValue",
+            "doubleValue",
+            "booleanValue",
+            "blobValue",
+        ):
+            if field_type in field:
+                return field[field_type]
+        raise ValueError(f"Unsupported Redshift Data API field: {field}")

@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPOSITORY="iLioh/comercial-andina-data-platform"
+REPOSITORY_OWNER="iLioh"
+REPOSITORY_OWNER_ID="108911528"
+REPOSITORY_NAME="comercial-andina-data-platform"
+REPOSITORY_ID="1355400057"
 ENVIRONMENT="dev"
 RESOURCE_GROUP="rg-comercial-andina-dev"
 LOCATION="chilecentral"
 IDENTITY_NAME="id-github-comercial-andina-dev"
-SHARED_RESOURCE_GROUP="rg-banco-andino-cicd"
-ACR_NAME="acrbancoandino84621"
+ACR_RESOURCE_GROUP="rg-comercial-andina-dev"
+LOG_RESOURCE_GROUP="rg-banco-andino-cicd"
+ACR_NAME="acrcomercialandina84621"
 LOG_WORKSPACE="workspace-rgbancoandinocicd37iy"
+OIDC_SUBJECT="repo:${REPOSITORY_OWNER}@${REPOSITORY_OWNER_ID}/${REPOSITORY_NAME}@${REPOSITORY_ID}:environment:${ENVIRONMENT}"
 
 if ! az identity show --name "$IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" \
   --output none 2>/dev/null; then
@@ -30,15 +35,21 @@ if ! az identity federated-credential show --name github-environment-dev \
   az identity federated-credential create --name github-environment-dev \
     --identity-name "$IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" \
     --issuer "https://token.actions.githubusercontent.com" \
-    --subject "repo:${REPOSITORY}:environment:${ENVIRONMENT}" \
+    --subject "$OIDC_SUBJECT" \
+    --audiences "api://AzureADTokenExchange" --output none
+else
+  az identity federated-credential update --name github-environment-dev \
+    --identity-name "$IDENTITY_NAME" --resource-group "$RESOURCE_GROUP" \
+    --issuer "https://token.actions.githubusercontent.com" \
+    --subject "$OIDC_SUBJECT" \
     --audiences "api://AzureADTokenExchange" --output none
 fi
 
 RG_SCOPE=$(az group show --name "$RESOURCE_GROUP" --query id --output tsv)
-ACR_SCOPE=$(az acr show --name "$ACR_NAME" --resource-group "$SHARED_RESOURCE_GROUP" \
+ACR_SCOPE=$(az acr show --name "$ACR_NAME" --resource-group "$ACR_RESOURCE_GROUP" \
   --query id --output tsv)
 LOG_SCOPE=$(az monitor log-analytics workspace show --workspace-name "$LOG_WORKSPACE" \
-  --resource-group "$SHARED_RESOURCE_GROUP" --query id --output tsv)
+  --resource-group "$LOG_RESOURCE_GROUP" --query id --output tsv)
 
 assign_role() {
   local role="$1"

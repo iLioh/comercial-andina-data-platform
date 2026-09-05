@@ -6,7 +6,8 @@
 - Grupo `rg-comercial-andina-dev` en `chilecentral`.
 - Azure CLI, Git, Python 3.11+ y Power BI Desktop.
 - Workspace gratuito de Prefect Cloud.
-- ACR y Log Analytics existentes reutilizados para reducir tiempo y costo.
+- ACR dedicado de Comercial Andina y Log Analytics centralizado reutilizado para
+  reducir tiempo y costo.
 
 ## 2. Validación local
 
@@ -36,8 +37,8 @@ Configurar en GitHub **Settings → Environments → dev → Variables**:
 | `DEPLOYER_PRINCIPAL_ID` | salida del script OIDC |
 | `AZURE_RESOURCE_GROUP` | `rg-comercial-andina-dev` |
 | `AZURE_LOCATION` | `chilecentral` |
-| `AZURE_ACR_NAME` | `acrbancoandino84621` |
-| `AZURE_ACR_RESOURCE_GROUP` | `rg-banco-andino-cicd` |
+| `AZURE_ACR_NAME` | `acrcomercialandina84621` |
+| `AZURE_ACR_RESOURCE_GROUP` | `rg-comercial-andina-dev` |
 | `LOG_ANALYTICS_WORKSPACE` | `workspace-rgbancoandinocicd37iy` |
 | `LOG_ANALYTICS_RESOURCE_GROUP` | `rg-banco-andino-cicd` |
 
@@ -106,5 +107,5 @@ las medidas, relaciones, tres páginas y RLS descritas en `powerbi/SEMANTIC_MODE
 
 La base Azure SQL se auto-pausa tras 60 minutos sin actividad y Container Apps Jobs
 solo ejecuta por lote. Al concluir la exposición, exportar evidencias y eliminar
-`rg-comercial-andina-dev` para detener los cargos de la PoC. El ACR y Log Analytics
-compartidos pertenecen a otro grupo y no se eliminan con esta operación.
+`rg-comercial-andina-dev` para detener los cargos de la PoC. El ACR dedicado se
+elimina junto con el grupo; Log Analytics se conserva porque es un recurso centralizado.

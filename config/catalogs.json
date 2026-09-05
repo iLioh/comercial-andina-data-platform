@@ -1,0 +1,25 @@
+{
+  "regions": ["Lima", "Norte", "Sur", "Centro", "Oriente"],
+  "products": [
+    {"name": "Laptop Pro", "category": "Computación", "min_price": 3200, "max_price": 5200},
+    {"name": "Laptop Business", "category": "Computación", "min_price": 2400, "max_price": 3900},
+    {"name": "Tablet 10", "category": "Computación", "min_price": 750, "max_price": 1500},
+    {"name": "Monitor 24", "category": "Computación", "min_price": 550, "max_price": 1050},
+    {"name": "Smart TV 50", "category": "Electrónica", "min_price": 1500, "max_price": 2800},
+    {"name": "Smartphone 5G", "category": "Electrónica", "min_price": 900, "max_price": 2600},
+    {"name": "Audífonos Bluetooth", "category": "Electrónica", "min_price": 90, "max_price": 450},
+    {"name": "Cámara Digital", "category": "Electrónica", "min_price": 1200, "max_price": 3500},
+    {"name": "Refrigeradora", "category": "Electrohogar", "min_price": 1600, "max_price": 3600},
+    {"name": "Microondas", "category": "Electrohogar", "min_price": 280, "max_price": 720},
+    {"name": "Licuadora", "category": "Electrohogar", "min_price": 110, "max_price": 380},
+    {"name": "Aspiradora", "category": "Electrohogar", "min_price": 260, "max_price": 850},
+    {"name": "Impresora Multifuncional", "category": "Oficina", "min_price": 480, "max_price": 1300},
+    {"name": "Proyector", "category": "Oficina", "min_price": 950, "max_price": 2800},
+    {"name": "Teclado Inalámbrico", "category": "Oficina", "min_price": 80, "max_price": 290},
+    {"name": "Mouse Inalámbrico", "category": "Oficina", "min_price": 45, "max_price": 180},
+    {"name": "Silla Ergonómica", "category": "Muebles", "min_price": 420, "max_price": 1250},
+    {"name": "Escritorio Ejecutivo", "category": "Muebles", "min_price": 650, "max_price": 1800},
+    {"name": "Estante Modular", "category": "Muebles", "min_price": 320, "max_price": 980},
+    {"name": "Archivador", "category": "Muebles", "min_price": 260, "max_price": 760}
+  ]
+}

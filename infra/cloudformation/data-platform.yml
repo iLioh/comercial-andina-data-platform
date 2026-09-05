@@ -1,0 +1,241 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Managed data services for Comercial Andina on AWS.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, prod]
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  VpcCidr:
+    Type: String
+    Default: 10.40.0.0/16
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  DatabaseName:
+    Type: String
+    Default: comercial_andina
+  RedshiftDatabaseName:
+    Type: String
+    Default: comercial_andina_dw
+
+Resources:
+  DataKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Comercial Andina data encryption key
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+
+  DataKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/comercial-andina-${Environment}
+      TargetKeyId: !Ref DataKey
+
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub comercial-andina-data-${AWS::AccountId}-${AWS::Region}-${Environment}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !GetAtt DataKey.Arn
+              SSEAlgorithm: aws:kms
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: DataClassification
+          Value: Internal
+
+  DataLakeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataLakeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt DataLakeBucket.Arn
+              - !Sub ${DataLakeBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  WorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Egress-only security group for the ETL worker
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL access only from the ETL worker
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref WorkerSecurityGroup
+
+  RdsSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for Comercial Andina RDS
+      SubnetIds: !Ref PrivateSubnetIds
+
+  SourceDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AllocatedStorage: 20
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      DBInstanceClass: db.t4g.micro
+      DBName: !Ref DatabaseName
+      DBSubnetGroupName: !Ref RdsSubnetGroup
+      DeletionProtection: false
+      Engine: postgres
+      KmsKeyId: !GetAtt DataKey.Arn
+      ManageMasterUserPassword: true
+      MasterUsername: ca_admin
+      MultiAZ: false
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      StorageType: gp3
+      VPCSecurityGroups: [!Ref RdsSecurityGroup]
+
+  RedshiftSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Redshift Serverless administrative credentials
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"ca_admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\'
+      KmsKeyId: !GetAtt DataKey.Arn
+
+  RedshiftCopyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub comercial-andina-${Environment}-redshift-copy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadRawWriteQuarantine
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:ListBucket]
+                Resource:
+                  - !GetAtt DataLakeBucket.Arn
+                  - !Sub ${DataLakeBucket.Arn}/*
+              - Effect: Allow
+                Action: [kms:Decrypt, kms:Encrypt, kms:GenerateDataKey]
+                Resource: !GetAtt DataKey.Arn
+
+  RedshiftSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Redshift access restricted to the analytics VPC
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5439
+          ToPort: 5439
+          CidrIp: !Ref VpcCidr
+
+  RedshiftNamespace:
+    Type: AWS::RedshiftServerless::Namespace
+    Properties:
+      NamespaceName: !Sub comercial-andina-${Environment}
+      AdminUsername: !Sub '{{resolve:secretsmanager:${RedshiftSecret}:SecretString:username}}'
+      AdminUserPassword: !Sub '{{resolve:secretsmanager:${RedshiftSecret}:SecretString:password}}'
+      DbName: !Ref RedshiftDatabaseName
+      DefaultIamRoleArn: !GetAtt RedshiftCopyRole.Arn
+      IamRoles: [!GetAtt RedshiftCopyRole.Arn]
+      KmsKeyId: !GetAtt DataKey.Arn
+      LogExports: [userlog, connectionlog, useractivitylog]
+
+  RedshiftWorkgroup:
+    Type: AWS::RedshiftServerless::Workgroup
+    Properties:
+      WorkgroupName: !Sub comercial-andina-${Environment}
+      NamespaceName: !Ref RedshiftNamespace
+      BaseCapacity: 4
+      EnhancedVpcRouting: true
+      PubliclyAccessible: false
+      SecurityGroupIds: [!Ref RedshiftSecurityGroup]
+      SubnetIds: !Ref PrivateSubnetIds
+
+  ContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub comercial-andina-etl-${Environment}
+      EncryptionConfiguration:
+        EncryptionType: KMS
+        KmsKey: !GetAtt DataKey.Arn
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Keep 20 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+
+Outputs:
+  DataLakeBucket:
+    Value: !Ref DataLakeBucket
+  KmsKeyArn:
+    Value: !GetAtt DataKey.Arn
+  RdsEndpoint:
+    Value: !GetAtt SourceDatabase.Endpoint.Address
+  RdsSecretArn:
+    Value: !GetAtt SourceDatabase.MasterUserSecret.SecretArn
+  RedshiftWorkgroup:
+    Value: !Ref RedshiftWorkgroup
+  RedshiftSecretArn:
+    Value: !Ref RedshiftSecret
+  WorkerSecurityGroupId:
+    Value: !Ref WorkerSecurityGroup
+  EcrRepositoryUri:
+    Value: !GetAtt ContainerRepository.RepositoryUri

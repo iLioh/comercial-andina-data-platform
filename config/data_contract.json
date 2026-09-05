@@ -1,0 +1,16 @@
+{
+  "contract_name": "ventas_origen",
+  "schema_version": "1.0",
+  "source_system": "VENTAS_OLTP",
+  "schedule": "D+1",
+  "business_timezone": "America/Lima",
+  "fields": [
+    {"name": "id_venta", "type": "integer", "nullable": false, "rule": "unique"},
+    {"name": "fecha_venta", "type": "date", "nullable": false, "rule": "not_future"},
+    {"name": "producto", "type": "string", "nullable": false, "rule": "known_product"},
+    {"name": "categoria", "type": "string", "nullable": false, "rule": "known_category"},
+    {"name": "region", "type": "string", "nullable": false, "rule": "known_region"},
+    {"name": "cantidad", "type": "integer", "nullable": false, "rule": "greater_than_zero"},
+    {"name": "precio_unitario", "type": "decimal(12,2)", "nullable": false, "rule": "greater_than_zero"}
+  ]
+}

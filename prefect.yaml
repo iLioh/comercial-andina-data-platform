@@ -1,0 +1,22 @@
+name: comercial-andina-data-platform
+prefect-version: 3
+
+build: []
+push: []
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /app
+
+deployments:
+  - name: ventas-diarias-d1
+    version: "1.0"
+    description: Extracción, RAW, calidad, DW, cuarentena y reconciliación diaria.
+    entrypoint: src/comercial_andina/flows/daily_sales.py:daily_sales_flow
+    tags: [comercial-andina, ventas, d1, aws]
+    schedule:
+      cron: "0 6 * * *"
+      timezone: America/Lima
+    work_pool:
+      name: comercial-andina-ecs
+      work_queue_name: default
+      job_variables: {}

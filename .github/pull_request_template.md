@@ -6,7 +6,8 @@
 
 - [ ] `ruff check .`
 - [ ] `pytest`
-- [ ] `cfn-lint infra/cloudformation/*.yml`
+- [ ] `az bicep build --file infra/bicep/main.bicep`
+- [ ] `az bicep build --file infra/bicep/job.bicep`
 - [ ] No se incluyeron secretos ni datos reales.
 - [ ] Se documentaron cambios de arquitectura, contrato o modelo semántico.
 

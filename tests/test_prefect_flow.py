@@ -23,7 +23,7 @@ def test_prefect_flow_exposes_each_operational_stage():
 
     assert task_names == [
         "01 - Preparar lote",
-        "02 - Extraer RDS y persistir RAW",
+        "02 - Extraer PostgreSQL y persistir RAW",
         "03 - Cargar Staging",
         "04 - Validar y publicar Data Warehouse",
         "05 - Exportar cuarentena",

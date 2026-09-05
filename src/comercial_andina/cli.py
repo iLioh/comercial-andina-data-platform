@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from comercial_andina.quality.validator import validate_rows
 from comercial_andina.source.catalog import load_catalog
@@ -38,27 +39,27 @@ def _generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_rds(args: argparse.Namespace) -> int:
-    from comercial_andina.etl.rds import execute_source_ddl, load_source_csv
+def _load_postgres(args: argparse.Namespace) -> int:
+    from comercial_andina.etl.postgres import execute_source_ddl, load_source_csv
 
     execute_source_ddl(
-        args.secret_arn, args.region, args.ddl, args.host, args.database
+        args.vault_url, args.secret_name, args.ddl, args.host, args.database
     )
     count = load_source_csv(
-        args.secret_arn, args.region, args.input, args.host, args.database
+        args.vault_url, args.secret_name, args.input, args.host, args.database
     )
     print(f"Loaded {count} rows into oltp.ventas_origen")
     return 0
 
 
-def _bootstrap_redshift(args: argparse.Namespace) -> int:
-    from comercial_andina.etl.redshift import RedshiftDataExecutor
+def _bootstrap_azure_sql(args: argparse.Namespace) -> int:
+    from comercial_andina.etl.azure_sql import AzureSqlExecutor
 
-    executor = RedshiftDataExecutor(
-        args.region,
-        args.workgroup,
+    executor = AzureSqlExecutor(
+        args.vault_url,
+        args.secret_name,
+        args.server,
         args.database,
-        args.secret_arn,
     )
     scripts = sorted(args.sql_directory.glob("*.sql"))
     if not scripts:
@@ -66,16 +67,61 @@ def _bootstrap_redshift(args: argparse.Namespace) -> int:
     for script in scripts:
         print(f"Executing {script}")
         executor.execute_file(script)
-    print(f"Applied {len(scripts)} Redshift scripts")
+    print(f"Applied {len(scripts)} Azure SQL scripts")
     return 0
 
 
 def _run_pipeline(args: argparse.Namespace) -> int:
     from comercial_andina.etl.pipeline import run_daily_pipeline
-    from comercial_andina.settings import AwsSettings
+    from comercial_andina.settings import AzureSettings
 
-    result = run_daily_pipeline(AwsSettings.from_environment(), args.batch_id)
+    result = run_daily_pipeline(AzureSettings.from_environment(), args.batch_id)
     print(f"Pipeline completed: {result}")
+    return 0
+
+
+def _initialize(_args: argparse.Namespace) -> int:
+    """Bootstrap both databases and load the reproducible laboratory dataset."""
+
+    from comercial_andina.etl.azure_sql import AzureSqlExecutor
+    from comercial_andina.etl.postgres import execute_source_ddl, load_source_csv
+    from comercial_andina.settings import AzureSettings
+
+    settings = AzureSettings.from_environment()
+    catalog = load_catalog(Path("config/catalogs.json"))
+    processing_date = datetime.now(ZoneInfo("America/Lima")).date()
+    rows = generate_sales(
+        catalog,
+        record_count=10_000,
+        seed=20260905,
+        processing_date=processing_date,
+    )
+    dataset = write_sales_csv(rows, Path("/tmp/ventas_origen.csv"))
+    execute_source_ddl(
+        settings.key_vault_url,
+        settings.postgres_secret_name,
+        Path("sql/postgres/01_create_source.sql"),
+        settings.postgres_host,
+        settings.postgres_database,
+    )
+    loaded = load_source_csv(
+        settings.key_vault_url,
+        settings.postgres_secret_name,
+        dataset,
+        settings.postgres_host,
+        settings.postgres_database,
+    )
+    executor = AzureSqlExecutor(
+        settings.key_vault_url,
+        settings.sql_secret_name,
+        settings.sql_server,
+        settings.sql_database,
+    )
+    scripts = sorted(Path("sql/azure_sql").glob("*.sql"))
+    for script in scripts:
+        print(f"Executing {script}")
+        executor.execute_file(script)
+    print(f"Environment initialized: source={loaded}, Azure SQL scripts={len(scripts)}")
     return 0
 
 
@@ -91,30 +137,37 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--batch-id", default="BATCH-20260901-001")
     generate.set_defaults(handler=_generate)
 
-    load_rds = subparsers.add_parser("load-rds", help="Create and load the RDS source table")
-    load_rds.add_argument("--secret-arn", required=True)
-    load_rds.add_argument("--host", required=True)
-    load_rds.add_argument("--database", default="comercial_andina")
-    load_rds.add_argument("--region", default="us-east-1")
-    load_rds.add_argument("--ddl", type=Path, default=Path("sql/rds/01_create_source.sql"))
-    load_rds.add_argument("--input", type=Path, default=Path("data/generated/ventas_origen.csv"))
-    load_rds.set_defaults(handler=_load_rds)
+    load_pg = subparsers.add_parser(
+        "load-postgres", help="Create and load the Azure PostgreSQL source table"
+    )
+    load_pg.add_argument("--vault-url", required=True)
+    load_pg.add_argument("--secret-name", default="postgres-credentials")
+    load_pg.add_argument("--host", required=True)
+    load_pg.add_argument("--database", default="comercial_andina")
+    load_pg.add_argument("--ddl", type=Path, default=Path("sql/postgres/01_create_source.sql"))
+    load_pg.add_argument("--input", type=Path, default=Path("data/generated/ventas_origen.csv"))
+    load_pg.set_defaults(handler=_load_postgres)
 
     bootstrap = subparsers.add_parser(
-        "bootstrap-redshift", help="Create Redshift schemas, tables, ETL and views"
+        "bootstrap-azure-sql", help="Create Azure SQL schemas, tables, ETL and views"
     )
-    bootstrap.add_argument("--secret-arn", required=True)
-    bootstrap.add_argument("--region", default="us-east-1")
-    bootstrap.add_argument("--workgroup", required=True)
+    bootstrap.add_argument("--vault-url", required=True)
+    bootstrap.add_argument("--secret-name", default="sql-credentials")
+    bootstrap.add_argument("--server", required=True)
     bootstrap.add_argument("--database", default="comercial_andina_dw")
     bootstrap.add_argument(
-        "--sql-directory", type=Path, default=Path("sql/redshift")
+        "--sql-directory", type=Path, default=Path("sql/azure_sql")
     )
-    bootstrap.set_defaults(handler=_bootstrap_redshift)
+    bootstrap.set_defaults(handler=_bootstrap_azure_sql)
 
     pipeline = subparsers.add_parser("run-pipeline", help="Execute one controlled ETL batch")
     pipeline.add_argument("--batch-id")
     pipeline.set_defaults(handler=_run_pipeline)
+
+    initialize = subparsers.add_parser(
+        "initialize", help="Create schemas and load the controlled source dataset"
+    )
+    initialize.set_defaults(handler=_initialize)
     return parser
 
 

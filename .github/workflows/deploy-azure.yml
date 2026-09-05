@@ -1,0 +1,112 @@
+name: Deploy Azure PoC
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub environment
+        required: true
+        default: dev
+        type: choice
+        options: [dev]
+      prefect_api_url:
+        description: Prefect Cloud workspace API URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-azure-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Authenticate with Azure using OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate infrastructure
+        run: |
+          az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+          az bicep build --file infra/bicep/job.bicep --stdout > /dev/null
+
+      - name: Deploy data platform
+        id: platform
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          SQL_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+        run: |
+          RUNNER_IP=$(curl --silent https://api.ipify.org)
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "platform-${GITHUB_RUN_ID}" \
+            --template-file infra/bicep/main.bicep \
+            --parameters environment="${{ inputs.environment }}" \
+                         location="${{ vars.AZURE_LOCATION }}" \
+                         deployerPrincipalId="${{ vars.DEPLOYER_PRINCIPAL_ID }}" \
+                         clientIpAddress="$RUNNER_IP" \
+                         postgresAdminPassword="$POSTGRES_PASSWORD" \
+                         sqlAdminPassword="$SQL_PASSWORD" \
+            --only-show-errors
+          OUTPUTS=$(az deployment group show \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "platform-${GITHUB_RUN_ID}" --query properties.outputs -o json | jq -c .)
+          echo "outputs=$OUTPUTS" >> "$GITHUB_OUTPUT"
+
+      - name: Build immutable ETL image in existing ACR
+        run: |
+          az acr build --registry "${{ vars.AZURE_ACR_NAME }}" \
+            --image "comercial-andina/etl:${GITHUB_SHA}" \
+            --image "comercial-andina/etl:latest" .
+
+      - name: Deploy Prefect Container Apps jobs
+        env:
+          PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
+          PLATFORM_OUTPUTS: ${{ steps.platform.outputs.outputs }}
+        run: |
+          value() { echo "$PLATFORM_OUTPUTS" | jq -r ".${1}.value"; }
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "jobs-${GITHUB_RUN_ID}" \
+            --template-file infra/bicep/job.bicep \
+            --parameters environment="${{ inputs.environment }}" \
+                         location="${{ vars.AZURE_LOCATION }}" \
+                         acrName="${{ vars.AZURE_ACR_NAME }}" \
+                         acrResourceGroup="${{ vars.AZURE_ACR_RESOURCE_GROUP }}" \
+                         logAnalyticsWorkspaceName="${{ vars.LOG_ANALYTICS_WORKSPACE }}" \
+                         logAnalyticsResourceGroup="${{ vars.LOG_ANALYTICS_RESOURCE_GROUP }}" \
+                         imageTag="${GITHUB_SHA}" \
+                         storageAccountName="$(value storageAccountName)" \
+                         keyVaultName="$(echo "$(value keyVaultUrl)" | sed -E 's#https://([^.]*)\..*#\1#')" \
+                         postgresHost="$(value postgresHost)" \
+                         sqlServerHost="$(value sqlServerHost)" \
+                         prefectApiUrl="${{ inputs.prefect_api_url }}" \
+                         prefectApiKey="$PREFECT_API_KEY" \
+            --only-show-errors
+
+      - name: Initialize databases
+        run: |
+          az containerapp job start \
+            --name "caj-comercial-andina-bootstrap-${{ inputs.environment }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"
+
+      - name: Deployment summary
+        run: |
+          echo "### Azure deployment started" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: ${{ vars.AZURE_ACR_NAME }}.azurecr.io/comercial-andina/etl:${GITHUB_SHA}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Bootstrap job started; inspect it in Azure Container Apps Jobs." >> "$GITHUB_STEP_SUMMARY"

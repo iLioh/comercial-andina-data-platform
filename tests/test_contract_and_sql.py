@@ -20,11 +20,19 @@ def test_mandatory_olap_operators_are_versioned():
         path.read_text(encoding="utf-8").upper()
         for path in sorted(Path("sql/olap").glob("*.sql"))
     )
-    for operator in ("GROUP BY", "ROLLUP", "CUBE", "GROUPING SETS"):
+    for operator in ("GROUP BY", "ROLLUP", "CUBE", "GROUPING SETS", "GROUPING_ID"):
         assert operator in olap
 
 
 def test_star_schema_tables_are_versioned():
-    ddl = Path("sql/redshift/02_create_tables.sql").read_text(encoding="utf-8").lower()
+    ddl = Path("sql/azure_sql/02_create_tables.sql").read_text(encoding="utf-8").lower()
     for table in ("dim_fecha", "dim_producto", "dim_region", "fact_ventas"):
         assert f"dw.{table}" in ddl
+
+
+def test_all_eight_quality_rules_are_implemented_in_azure_sql():
+    procedure = Path("sql/azure_sql/04_create_processing_procedure.sql").read_text(
+        encoding="utf-8"
+    )
+    for number in range(1, 9):
+        assert f"DQ-{number:03d}" in procedure

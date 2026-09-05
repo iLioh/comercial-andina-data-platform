@@ -1,4 +1,4 @@
-.PHONY: install quality test generate validate-cfn
+.PHONY: install quality test generate validate-bicep
 
 install:
 	python -m pip install -e ".[dev]"
@@ -12,5 +12,5 @@ test:
 generate:
 	comercial-andina generate
 
-validate-cfn:
-	cfn-lint infra/cloudformation/*.yml
+validate-bicep:
+	az bicep build --file infra/bicep/main.bicep --stdout > /dev/null

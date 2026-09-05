@@ -1,4 +1,4 @@
-"""Environment-based runtime configuration with no embedded credentials."""
+"""Environment-based Azure runtime configuration with no embedded credentials."""
 
 from __future__ import annotations
 
@@ -7,29 +7,35 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class AwsSettings:
-    """Identifiers required by the AWS ETL runtime."""
+class AzureSettings:
+    """Non-secret identifiers required by the Azure ETL runtime."""
 
-    region: str
-    raw_bucket: str
-    rds_host: str
-    rds_database: str
-    rds_secret_arn: str
-    redshift_workgroup: str
-    redshift_database: str
-    redshift_secret_arn: str
+    storage_account: str
+    raw_container: str
+    manifest_container: str
+    quarantine_container: str
+    key_vault_url: str
+    postgres_host: str
+    postgres_database: str
+    postgres_secret_name: str
+    sql_server: str
+    sql_database: str
+    sql_secret_name: str
 
     @classmethod
-    def from_environment(cls) -> AwsSettings:
+    def from_environment(cls) -> AzureSettings:
         values = {
-            "region": os.getenv("AWS_REGION", "us-east-1"),
-            "raw_bucket": os.getenv("CA_RAW_BUCKET", ""),
-            "rds_host": os.getenv("CA_RDS_HOST", ""),
-            "rds_database": os.getenv("CA_RDS_DATABASE", "comercial_andina"),
-            "rds_secret_arn": os.getenv("CA_RDS_SECRET_ARN", ""),
-            "redshift_workgroup": os.getenv("CA_REDSHIFT_WORKGROUP", ""),
-            "redshift_database": os.getenv("CA_REDSHIFT_DATABASE", "comercial_andina_dw"),
-            "redshift_secret_arn": os.getenv("CA_REDSHIFT_SECRET_ARN", ""),
+            "storage_account": os.getenv("CA_STORAGE_ACCOUNT", ""),
+            "raw_container": os.getenv("CA_RAW_CONTAINER", "raw"),
+            "manifest_container": os.getenv("CA_MANIFEST_CONTAINER", "manifests"),
+            "quarantine_container": os.getenv("CA_QUARANTINE_CONTAINER", "quarantine"),
+            "key_vault_url": os.getenv("CA_KEY_VAULT_URL", ""),
+            "postgres_host": os.getenv("CA_POSTGRES_HOST", ""),
+            "postgres_database": os.getenv("CA_POSTGRES_DATABASE", "comercial_andina"),
+            "postgres_secret_name": os.getenv("CA_POSTGRES_SECRET_NAME", "postgres-credentials"),
+            "sql_server": os.getenv("CA_SQL_SERVER", ""),
+            "sql_database": os.getenv("CA_SQL_DATABASE", "comercial_andina_dw"),
+            "sql_secret_name": os.getenv("CA_SQL_SECRET_NAME", "sql-credentials"),
         }
         missing = [key for key, value in values.items() if not value]
         if missing:

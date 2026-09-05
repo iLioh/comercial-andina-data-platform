@@ -1,7 +1,9 @@
-"""Idempotent ETL steps reusable from Prefect and the command line."""
+"""Idempotent Azure ETL steps reusable from Prefect and the command line."""
 
 from __future__ import annotations
 
+import csv
+import json
 import re
 import tempfile
 from datetime import datetime
@@ -9,10 +11,10 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from comercial_andina.etl.rds import extract_source_csv
-from comercial_andina.etl.redshift import RedshiftDataExecutor
-from comercial_andina.etl.s3 import upload_file
-from comercial_andina.settings import AwsSettings
+from comercial_andina.azure.storage import download_file, upload_file
+from comercial_andina.etl.azure_sql import AzureSqlExecutor
+from comercial_andina.etl.postgres import extract_source_csv
+from comercial_andina.settings import AzureSettings
 from comercial_andina.source.manifest import build_manifest, write_manifest
 
 SAFE_BATCH_ID = re.compile(r"^[A-Z0-9-]+$")
@@ -20,15 +22,11 @@ BUSINESS_TIMEZONE = ZoneInfo("America/Lima")
 
 
 def create_batch_id(now: datetime | None = None) -> str:
-    """Create the traceability key using the configured business timezone."""
-
     current = now or datetime.now(BUSINESS_TIMEZONE)
     return current.strftime("BATCH-%Y%m%d-%H%M%S")
 
 
 def select_batch_id(batch_id: str | None = None) -> str:
-    """Create or validate a batch identifier before any external operation."""
-
     selected_batch = batch_id or create_batch_id()
     if not SAFE_BATCH_ID.fullmatch(selected_batch):
         raise ValueError("batch_id contains unsupported characters")
@@ -36,46 +34,48 @@ def select_batch_id(batch_id: str | None = None) -> str:
 
 
 def extract_and_persist_raw(
-    settings: AwsSettings,
+    settings: AzureSettings,
     batch_id: str,
     now: datetime | None = None,
 ) -> dict[str, str | int]:
-    """Extract RDS and persist the source plus its manifest before transformation."""
+    """Extract PostgreSQL and preserve RAW plus manifest before transformation."""
 
     selected_batch = select_batch_id(batch_id)
     current = now or datetime.now(BUSINESS_TIMEZONE)
     date_prefix = current.strftime("%Y/%m/%d")
-
-    with tempfile.TemporaryDirectory(prefix="comercial-andina-") as temp_directory:
-        temp = Path(temp_directory)
+    with tempfile.TemporaryDirectory(prefix="comercial-andina-") as directory:
+        temp = Path(directory)
         csv_path = temp / "ventas_origen.csv"
         extracted_count = extract_source_csv(
-            settings.rds_secret_arn,
-            settings.region,
+            settings.key_vault_url,
+            settings.postgres_secret_name,
             csv_path,
-            settings.rds_host,
-            settings.rds_database,
+            settings.postgres_host,
+            settings.postgres_database,
         )
         manifest = build_manifest(csv_path, batch_id=selected_batch)
+        try:
+            batch_time = datetime.strptime(selected_batch, "BATCH-%Y%m%d-%H%M%S").replace(
+                tzinfo=BUSINESS_TIMEZONE
+            )
+            manifest["extracted_at_utc"] = batch_time.astimezone(ZoneInfo("UTC")).isoformat()
+        except ValueError:
+            pass
         manifest_path = write_manifest(manifest, temp / "manifest.json")
-
-        raw_key = f"raw/ventas/{date_prefix}/{selected_batch}/ventas_origen.csv"
-        manifest_key = f"manifests/ventas/{date_prefix}/{selected_batch}/manifest.json"
         raw_uri = upload_file(
             csv_path,
-            settings.raw_bucket,
-            raw_key,
-            settings.region,
-            metadata={"batch-id": selected_batch, "schema-version": "1.0"},
+            settings.storage_account,
+            settings.raw_container,
+            f"ventas/{date_prefix}/{selected_batch}/ventas_origen.csv",
+            metadata={"batch_id": selected_batch, "schema_version": "1.0"},
         )
         manifest_uri = upload_file(
             manifest_path,
-            settings.raw_bucket,
-            manifest_key,
-            settings.region,
-            metadata={"batch-id": selected_batch},
+            settings.storage_account,
+            settings.manifest_container,
+            f"ventas/{date_prefix}/{selected_batch}/manifest.json",
+            metadata={"batch_id": selected_batch},
         )
-
     return {
         "batch_id": selected_batch,
         "date_prefix": date_prefix,
@@ -85,68 +85,78 @@ def extract_and_persist_raw(
     }
 
 
-def load_staging(settings: AwsSettings, batch_id: str, raw_uri: str) -> None:
-    """Replace the controlled Staging workspace with one RAW batch."""
+def load_staging(settings: AzureSettings, batch_id: str, raw_uri: str) -> None:
+    """Load one immutable RAW batch into the Azure SQL validation workspace."""
 
-    escaped_batch = select_batch_id(batch_id).replace("'", "''")
-    escaped_uri = raw_uri.replace("'", "''")
-    executor = _redshift_executor(settings)
-    executor.execute("TRUNCATE TABLE staging.stg_ventas_raw")
-    executor.execute(
-        "COPY staging.stg_ventas_raw "
-        "(id_venta, fecha_venta, producto, categoria, region, cantidad, precio_unitario) "
-        f"FROM '{escaped_uri}' IAM_ROLE default CSV IGNOREHEADER 1 "
-        "DATEFORMAT 'auto' TIMEFORMAT 'auto' BLANKSASNULL EMPTYASNULL"
+    selected_batch = select_batch_id(batch_id)
+    executor = _sql_executor(settings)
+    with tempfile.TemporaryDirectory(prefix="comercial-andina-stage-") as directory:
+        source = download_file(
+            raw_uri,
+            settings.storage_account,
+            Path(directory) / "ventas_origen.csv",
+        )
+        with source.open("r", encoding="utf-8", newline="") as payload:
+            rows = [
+                (*row, selected_batch, datetime.now(BUSINESS_TIMEZONE).replace(tzinfo=None))
+                for row in csv.reader(payload)
+                if row and row[0] != "id_venta"
+            ]
+    executor.execute("DELETE FROM staging.stg_ventas_raw WHERE batch_id = ?", (selected_batch,))
+    executor.execute_many(
+        "INSERT INTO staging.stg_ventas_raw "
+        "(id_venta, fecha_venta, producto, categoria, region, cantidad, precio_unitario, "
+        "batch_id, ingestion_timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
     )
-    executor.execute(
-        "UPDATE staging.stg_ventas_raw "
-        f"SET batch_id = '{escaped_batch}', ingestion_timestamp = GETDATE()"
-    )
 
 
-def process_quality_and_warehouse(settings: AwsSettings, batch_id: str) -> None:
+def process_quality_and_warehouse(settings: AzureSettings, batch_id: str) -> None:
     """Apply quality rules and publish valid rows into the dimensional warehouse."""
 
-    escaped_batch = select_batch_id(batch_id).replace("'", "''")
-    _redshift_executor(settings).execute(f"CALL etl.sp_procesar_lote('{escaped_batch}')")
-
-
-def export_quarantine(
-    settings: AwsSettings,
-    batch_id: str,
-    date_prefix: str,
-) -> str:
-    """Export rejected records and evidence to the encrypted S3 quarantine prefix."""
-
-    escaped_batch = select_batch_id(batch_id).replace("'", "''")
-    quarantine_uri = f"s3://{settings.raw_bucket}/quarantine/{date_prefix}/{batch_id}/"
-    escaped_quarantine = quarantine_uri.replace("'", "''")
-    _redshift_executor(settings).execute(
-        "UNLOAD ('SELECT * FROM audit.dq_rechazos "
-        f"WHERE batch_id = ''{escaped_batch}''') "
-        f"TO '{escaped_quarantine}rechazos-' IAM_ROLE default "
-        "FORMAT AS JSON ALLOWOVERWRITE PARALLEL OFF"
+    _sql_executor(settings).execute(
+        "EXEC etl.sp_procesar_lote @p_batch_id = ?", (select_batch_id(batch_id),)
     )
-    return quarantine_uri
+
+
+def export_quarantine(settings: AzureSettings, batch_id: str, date_prefix: str) -> str:
+    """Export rejected rows and rule evidence to the quarantine container."""
+
+    selected_batch = select_batch_id(batch_id)
+    records = _sql_executor(settings).query_all(
+        "SELECT * FROM audit.dq_rechazos WHERE batch_id = ? ORDER BY rechazo_key",
+        (selected_batch,),
+    )
+    with tempfile.TemporaryDirectory(prefix="comercial-andina-quarantine-") as directory:
+        path = Path(directory) / "rechazos.jsonl"
+        with path.open("w", encoding="utf-8") as output:
+            for record in records:
+                output.write(json.dumps(record, default=str, ensure_ascii=False) + "\n")
+        return upload_file(
+            path,
+            settings.storage_account,
+            settings.quarantine_container,
+            f"ventas/{date_prefix}/{selected_batch}/rechazos.jsonl",
+            metadata={"batch_id": selected_batch, "record_count": str(len(records))},
+        )
 
 
 def reconcile_batch(
-    settings: AwsSettings,
+    settings: AzureSettings,
     batch_id: str,
     expected_source_count: int,
 ) -> dict[str, Any]:
     """Fail the flow when audit counts or publication status do not reconcile."""
 
-    escaped_batch = select_batch_id(batch_id).replace("'", "''")
-    control = _redshift_executor(settings).query_one(
+    selected_batch = select_batch_id(batch_id)
+    control = _sql_executor(settings).query_one(
         "SELECT registros_origen, registros_validos, registros_rechazados, "
-        "registros_publicados, importe_publicado, estado "
-        "FROM audit.etl_control "
-        f"WHERE batch_id = '{escaped_batch}'"
+        "registros_publicados, importe_publicado, estado FROM audit.etl_control "
+        "WHERE batch_id = ?",
+        (selected_batch,),
     )
     if control is None:
         raise RuntimeError(f"No audit control found for {batch_id}")
-
     source_count = int(control["registros_origen"])
     valid_count = int(control["registros_validos"])
     rejected_count = int(control["registros_rechazados"])
@@ -160,7 +170,6 @@ def reconcile_batch(
         raise RuntimeError("Quality reconciliation failed: valid + rejected != source")
     if valid_count != published_count or status != "SUCCESS":
         raise RuntimeError("Warehouse reconciliation failed: valid rows were not fully published")
-
     return {
         "source_count": source_count,
         "valid_count": valid_count,
@@ -171,34 +180,22 @@ def reconcile_batch(
     }
 
 
-def run_daily_pipeline(settings: AwsSettings, batch_id: str | None = None) -> dict[str, Any]:
+def run_daily_pipeline(settings: AzureSettings, batch_id: str | None = None) -> dict[str, Any]:
     """Run every ETL step without requiring the Prefect orchestrator."""
 
     selected_batch = select_batch_id(batch_id)
     raw = extract_and_persist_raw(settings, selected_batch)
     load_staging(settings, selected_batch, str(raw["raw_uri"]))
     process_quality_and_warehouse(settings, selected_batch)
-    quarantine_uri = export_quarantine(
-        settings,
-        selected_batch,
-        str(raw["date_prefix"]),
-    )
-    reconciliation = reconcile_batch(
-        settings,
-        selected_batch,
-        int(raw["extracted_count"]),
-    )
-    return {
-        **raw,
-        **reconciliation,
-        "quarantine_uri": quarantine_uri,
-    }
+    quarantine_uri = export_quarantine(settings, selected_batch, str(raw["date_prefix"]))
+    reconciliation = reconcile_batch(settings, selected_batch, int(raw["extracted_count"]))
+    return {**raw, **reconciliation, "quarantine_uri": quarantine_uri}
 
 
-def _redshift_executor(settings: AwsSettings) -> RedshiftDataExecutor:
-    return RedshiftDataExecutor(
-        settings.region,
-        settings.redshift_workgroup,
-        settings.redshift_database,
-        settings.redshift_secret_arn,
+def _sql_executor(settings: AzureSettings) -> AzureSqlExecutor:
+    return AzureSqlExecutor(
+        settings.key_vault_url,
+        settings.sql_secret_name,
+        settings.sql_server,
+        settings.sql_database,
     )

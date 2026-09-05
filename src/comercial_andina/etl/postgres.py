@@ -1,4 +1,4 @@
-"""PostgreSQL source extraction and initial dataset loading."""
+"""Azure Database for PostgreSQL source extraction and dataset loading."""
 
 from __future__ import annotations
 
@@ -6,21 +6,17 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from comercial_andina.aws.secrets import get_json_secret
+from comercial_andina.azure.key_vault import get_json_secret
 from comercial_andina.source.generator import SOURCE_COLUMNS
 
 
-def _connect(
-    secret: dict[str, Any],
-    host: str | None = None,
-    database: str | None = None,
-):
+def _connect(secret: dict[str, Any], host: str, database: str):
     import psycopg
 
     return psycopg.connect(
-        host=host or secret["host"],
+        host=host,
         port=int(secret.get("port", 5432)),
-        dbname=database or secret.get("dbname", "comercial_andina"),
+        dbname=database,
         user=secret["username"],
         password=secret["password"],
         sslmode="require",
@@ -28,30 +24,30 @@ def _connect(
 
 
 def execute_source_ddl(
-    secret_arn: str,
-    region: str,
+    vault_url: str,
+    secret_name: str,
     sql_path: str | Path,
-    host: str | None = None,
-    database: str | None = None,
+    host: str,
+    database: str,
 ) -> None:
-    """Create the OLTP schema and source table."""
+    """Create the simulated operational source."""
 
-    secret = get_json_secret(secret_arn, region)
+    secret = get_json_secret(vault_url, secret_name)
     with _connect(secret, host, database) as connection:
         connection.execute(Path(sql_path).read_text(encoding="utf-8"))
 
 
 def load_source_csv(
-    secret_arn: str,
-    region: str,
+    vault_url: str,
+    secret_name: str,
     csv_path: str | Path,
-    host: str | None = None,
-    database: str | None = None,
+    host: str,
+    database: str,
 ) -> int:
-    """Replace the simulated source with a contract-compatible CSV dataset."""
+    """Replace the source with a reproducible contract-compatible dataset."""
 
     source_path = Path(csv_path)
-    secret = get_json_secret(secret_arn, region)
+    secret = get_json_secret(vault_url, secret_name)
     copy_sql = (
         "COPY oltp.ventas_origen (id_venta, fecha_venta, producto, categoria, region, "
         "cantidad, precio_unitario) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
@@ -67,17 +63,17 @@ def load_source_csv(
 
 
 def extract_source_csv(
-    secret_arn: str,
-    region: str,
+    vault_url: str,
+    secret_name: str,
     output_path: str | Path,
-    host: str | None = None,
-    database: str | None = None,
+    host: str,
+    database: str,
 ) -> int:
-    """Extract all source rows using the seven-field laboratory contract."""
+    """Extract the exact seven-field source contract required by the laboratory."""
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    secret = get_json_secret(secret_arn, region)
+    secret = get_json_secret(vault_url, secret_name)
     query = """
         SELECT id_venta, fecha_venta, producto, categoria, region, cantidad, precio_unitario
         FROM oltp.ventas_origen

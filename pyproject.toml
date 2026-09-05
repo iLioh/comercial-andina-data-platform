@@ -10,16 +10,17 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-aws = [
-    "boto3>=1.35",
+azure = [
+    "azure-identity>=1.24",
+    "azure-keyvault-secrets>=4.10",
+    "azure-storage-blob>=12.26",
+    "pyodbc>=5.2",
     "psycopg[binary]>=3.2",
-    "sqlparse>=0.5",
 ]
 orchestration = [
     "prefect>=3.4",
 ]
 dev = [
-    "cfn-lint>=1.37",
     "pytest>=8",
     "ruff>=0.12",
     "PyYAML>=6",

@@ -2,24 +2,35 @@
 
 ## Alcance
 
-Esta es una prueba de concepto académica con patrones aplicables a entornos
-regulados. No deben cargarse datos personales, bancarios ni credenciales reales en
-el dataset o en el repositorio.
+Esta PoC procesa únicamente datos sintéticos. Los controles implementados reproducen
+patrones profesionales, pero no sustituyen una evaluación regulatoria bancaria.
 
-## Controles
+## Controles implementados
 
-- No se permiten claves AWS estáticas en GitHub ni en archivos `.env` versionados.
-- GitHub Actions se autentica en AWS mediante OIDC y credenciales temporales.
-- Las contraseñas se almacenan en AWS Secrets Manager.
-- RDS y Redshift permanecen en subredes privadas y sin acceso público.
-- S3 bloquea acceso público, exige TLS, conserva versiones y cifra con KMS.
-- Los roles IAM siguen mínimo privilegio y separan ejecución, ETL y lectura BI.
-- Power BI aplica RLS a las jefaturas regionales.
-- CloudWatch, Redshift y las tablas `audit` conservan evidencia operacional.
+- GitHub Actions se autentica mediante OIDC; no existen secretos de Azure permanentes.
+- PostgreSQL y Azure SQL exigen TLS; sus contraseñas se conservan en Key Vault.
+- Container Apps usa Managed Identity y permisos RBAC de alcance mínimo.
+- ADLS Gen2 bloquea acceso público, Shared Key y tráfico sin HTTPS.
+- RAW, manifiestos y cuarentena incluyen `batch_id` y checksum SHA-256.
+- Los contenedores ejecutan como usuario no privilegiado.
+- Dependabot, CodeQL, Ruff, Pytest, Bicep build y Docker build protegen los PR.
+- Azure Monitor, Log Analytics, Prefect y `audit.etl_control` conservan evidencia.
 
-## Reporte de vulnerabilidades
+## Tratamiento de secretos
 
-No publique secretos ni detalles explotables en un Issue público. Revoque primero
-cualquier credencial expuesta y use un canal privado con el responsable del
-proyecto. Esta PoC no representa por sí sola una certificación de cumplimiento
-normativo ni una plataforma bancaria productiva.
+Nunca se deben confirmar, copiar a incidencias o versionar contraseñas, API keys,
+tokens, `.env`, cadenas de conexión, identificadores sensibles ni exportaciones reales.
+Los secretos del entorno `dev` se almacenan cifrados en GitHub Environments y Azure
+Key Vault.
+
+## Evolución para producción bancaria
+
+La PoC habilita temporalmente endpoints públicos restringidos por firewall para poder
+demostrar Power BI dentro del tiempo académico. Un despliegue productivo debe añadir
+Private Endpoints, VNet integration, Azure Firewall, DNS privado, Defender for Cloud,
+claves administradas por el cliente, ambientes dev/qa/prod y aprobación segregada.
+
+## Reporte
+
+No publique vulnerabilidades como issue. Repórtelas privadamente al propietario del
+repositorio e incluya componente, impacto, reproducción segura y mitigación propuesta.

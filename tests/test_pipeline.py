@@ -19,7 +19,7 @@ def test_pipeline_rejects_unsafe_batch_before_external_calls():
 
 def test_reconciliation_accepts_balanced_batch(monkeypatch):
     class Executor:
-        def query_one(self, _sql):
+        def query_one(self, _sql, _parameters=None):
             return {
                 "registros_origen": 10_000,
                 "registros_validos": 9_980,
@@ -29,7 +29,7 @@ def test_reconciliation_accepts_balanced_batch(monkeypatch):
                 "estado": "SUCCESS",
             }
 
-    monkeypatch.setattr(pipeline, "_redshift_executor", lambda _settings: Executor())
+    monkeypatch.setattr(pipeline, "_sql_executor", lambda _settings: Executor())
     result = pipeline.reconcile_batch(object(), "BATCH-20260905-001", 10_000)
 
     assert result["valid_count"] == 9_980
@@ -39,7 +39,7 @@ def test_reconciliation_accepts_balanced_batch(monkeypatch):
 
 def test_reconciliation_fails_when_valid_rows_are_not_published(monkeypatch):
     class Executor:
-        def query_one(self, _sql):
+        def query_one(self, _sql, _parameters=None):
             return {
                 "registros_origen": 100,
                 "registros_validos": 99,
@@ -49,6 +49,6 @@ def test_reconciliation_fails_when_valid_rows_are_not_published(monkeypatch):
                 "estado": "FAILED",
             }
 
-    monkeypatch.setattr(pipeline, "_redshift_executor", lambda _settings: Executor())
+    monkeypatch.setattr(pipeline, "_sql_executor", lambda _settings: Executor())
     with pytest.raises(RuntimeError, match="Warehouse reconciliation failed"):
         pipeline.reconcile_batch(object(), "BATCH-20260905-002", 100)

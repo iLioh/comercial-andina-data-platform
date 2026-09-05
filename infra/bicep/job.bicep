@@ -108,7 +108,7 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 resource job 'Microsoft.App/jobs@2024-03-01' = {
-  name: 'caj-comercial-andina-etl-${environment}'
+  name: 'caj-ca-etl-${environment}'
   location: location
   tags: commonTags
   identity: {
@@ -143,7 +143,7 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
 }
 
 resource bootstrapJob 'Microsoft.App/jobs@2024-03-01' = {
-  name: 'caj-comercial-andina-bootstrap-${environment}'
+  name: 'caj-ca-bootstrap-${environment}'
   location: location
   tags: commonTags
   identity: {

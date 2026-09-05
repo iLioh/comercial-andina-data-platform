@@ -66,7 +66,7 @@ Comprobar la ejecución de bootstrap:
 
 ```bash
 az containerapp job execution list \
-  --name caj-comercial-andina-bootstrap-dev \
+  --name caj-ca-bootstrap-dev \
   --resource-group rg-comercial-andina-dev \
   --output table
 ```
@@ -75,7 +75,7 @@ Iniciar el pipeline principal:
 
 ```bash
 az containerapp job start \
-  --name caj-comercial-andina-etl-dev \
+  --name caj-ca-etl-dev \
   --resource-group rg-comercial-andina-dev
 ```
 

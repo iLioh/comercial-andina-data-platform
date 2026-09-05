@@ -224,3 +224,5 @@ __marimo__/
 data/generated/
 data/raw/
 data/quarantine/
+.aws-sam/
+cfn-output.json

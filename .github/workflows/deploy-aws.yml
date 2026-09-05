@@ -1,0 +1,121 @@
+name: Deploy AWS PoC
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub environment to deploy
+        required: true
+        default: dev
+        type: choice
+        options: [dev, qa, prod]
+      prefect_api_url:
+        description: Prefect Cloud workspace API URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Validate CloudFormation
+        run: |
+          for template in infra/cloudformation/*.yml; do
+            aws cloudformation validate-template --template-body "file://${template}"
+          done
+
+      - name: Deploy network
+        run: |
+          aws cloudformation deploy \
+            --stack-name "comercial-andina-${{ inputs.environment }}-network" \
+            --template-file infra/cloudformation/network.yml \
+            --parameter-overrides "Environment=${{ inputs.environment }}" \
+            --no-fail-on-empty-changeset
+
+      - name: Read network outputs
+        id: network
+        run: |
+          STACK="comercial-andina-${{ inputs.environment }}-network"
+          echo "vpc=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)" >> "$GITHUB_OUTPUT"
+          echo "cidr=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='VpcCidr'].OutputValue" --output text)" >> "$GITHUB_OUTPUT"
+          echo "private_subnets=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnetIds'].OutputValue" --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy data services
+        run: |
+          aws cloudformation deploy \
+            --stack-name "comercial-andina-${{ inputs.environment }}-data" \
+            --template-file infra/cloudformation/data-platform.yml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "Environment=${{ inputs.environment }}" \
+              "VpcId=${{ steps.network.outputs.vpc }}" \
+              "VpcCidr=${{ steps.network.outputs.cidr }}" \
+              "PrivateSubnetIds=${{ steps.network.outputs.private_subnets }}" \
+            --no-fail-on-empty-changeset
+
+      - name: Read data outputs
+        id: data
+        run: |
+          STACK="comercial-andina-${{ inputs.environment }}-data"
+          output() { aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+          echo "bucket=$(output DataLakeBucket)" >> "$GITHUB_OUTPUT"
+          echo "kms=$(output KmsKeyArn)" >> "$GITHUB_OUTPUT"
+          echo "rds_endpoint=$(output RdsEndpoint)" >> "$GITHUB_OUTPUT"
+          echo "rds_secret=$(output RdsSecretArn)" >> "$GITHUB_OUTPUT"
+          echo "redshift_workgroup=$(output RedshiftWorkgroup)" >> "$GITHUB_OUTPUT"
+          echo "redshift_secret=$(output RedshiftSecretArn)" >> "$GITHUB_OUTPUT"
+          echo "worker_sg=$(output WorkerSecurityGroupId)" >> "$GITHUB_OUTPUT"
+          echo "ecr=$(output EcrRepositoryUri)" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.7
+
+      - name: Build and publish immutable ETL image
+        env:
+          IMAGE_URI: ${{ steps.data.outputs.ecr }}:${{ github.sha }}
+        run: |
+          docker build --tag "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Deploy Prefect worker
+        run: |
+          aws cloudformation deploy \
+            --stack-name "comercial-andina-${{ inputs.environment }}-compute" \
+            --template-file infra/cloudformation/compute.yml \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              "Environment=${{ inputs.environment }}" \
+              "PrivateSubnetIds=${{ steps.network.outputs.private_subnets }}" \
+              "WorkerSecurityGroupId=${{ steps.data.outputs.worker_sg }}" \
+              "ContainerImage=${IMAGE_URI}" \
+              "DataLakeBucket=${{ steps.data.outputs.bucket }}" \
+              "KmsKeyArn=${{ steps.data.outputs.kms }}" \
+              "RdsEndpoint=${{ steps.data.outputs.rds_endpoint }}" \
+              "RdsSecretArn=${{ steps.data.outputs.rds_secret }}" \
+              "RedshiftWorkgroup=${{ steps.data.outputs.redshift_workgroup }}" \
+              "RedshiftSecretArn=${{ steps.data.outputs.redshift_secret }}" \
+              "PrefectApiUrl=${{ inputs.prefect_api_url }}" \
+              "PrefectApiKeySecretArn=${{ vars.PREFECT_API_KEY_SECRET_ARN }}" \
+            --no-fail-on-empty-changeset

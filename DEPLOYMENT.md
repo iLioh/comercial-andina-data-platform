@@ -56,7 +56,9 @@ No mostrar ni guardar estos valores fuera de los almacenes cifrados.
 2. Abrir **Actions → Deploy Azure PoC → Run workflow**.
 3. Seleccionar `dev` e ingresar el API URL del workspace de Prefect.
 4. El workflow despliega ADLS, Key Vault, PostgreSQL, Azure SQL y Container Apps Jobs.
-5. Luego construye la imagen en ACR e inicia el job de bootstrap.
+5. Luego construye la imagen en el runner administrado de GitHub, la publica en
+   ACR con OIDC e inicia el job de bootstrap. Este método evita depender de ACR
+   Tasks en regiones donde el servicio de compilación remota no está disponible.
 
 ## 5. Inicialización y primer pipeline
 

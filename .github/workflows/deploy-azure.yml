@@ -67,11 +67,16 @@ jobs:
             --name "platform-${GITHUB_RUN_ID}" --query properties.outputs -o json | jq -c .)
           echo "outputs=$OUTPUTS" >> "$GITHUB_OUTPUT"
 
-      - name: Build immutable ETL image in existing ACR
+      - name: Build and push immutable ETL image
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.AZURE_ACR_NAME }}.azurecr.io
         run: |
-          az acr build --registry "${{ vars.AZURE_ACR_NAME }}" \
-            --image "comercial-andina/etl:${GITHUB_SHA}" \
-            --image "comercial-andina/etl:latest" .
+          az acr login --name "${{ vars.AZURE_ACR_NAME }}"
+          docker build --platform linux/amd64 \
+            --tag "$ACR_LOGIN_SERVER/comercial-andina/etl:${GITHUB_SHA}" \
+            --tag "$ACR_LOGIN_SERVER/comercial-andina/etl:latest" .
+          docker push "$ACR_LOGIN_SERVER/comercial-andina/etl:${GITHUB_SHA}"
+          docker push "$ACR_LOGIN_SERVER/comercial-andina/etl:latest"
 
       - name: Deploy Prefect Container Apps jobs
         env:

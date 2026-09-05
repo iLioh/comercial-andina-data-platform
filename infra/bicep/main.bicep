@@ -209,5 +209,5 @@ output storageAccountName string = storage.name
 output keyVaultUrl string = keyVault.properties.vaultUri
 output postgresHost string = postgres.properties.fullyQualifiedDomainName
 output postgresDatabase string = postgresDb.name
-output sqlServerHost string = '${sqlServer.name}.database.windows.net'
+output sqlServerHost string = '${sqlServer.name}${environment().suffixes.sqlServerHostname}'
 output sqlDatabase string = sqlDb.name

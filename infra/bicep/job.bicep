@@ -43,20 +43,17 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
   tags: commonTags
 }
 
-var acrPull = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var storageBlobContributor = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 var keyVaultSecretsUser = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 
-resource acrRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: acr
-  name: guid(acr.id, identity.id, acrPull)
-  properties: {
+module acrPullAssignment 'modules/acr-pull.bicep' = {
+  name: 'assign-acr-pull'
+  scope: resourceGroup(acrResourceGroup)
+  params: {
+    acrName: acr.name
     principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: acrPull
   }
 }
 resource storageRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -142,7 +139,7 @@ resource job 'Microsoft.App/jobs@2024-03-01' = {
       }]
     }
   }
-  dependsOn: [acrRole, storageRole, vaultRole]
+  dependsOn: [acrPullAssignment, storageRole, vaultRole]
 }
 
 resource bootstrapJob 'Microsoft.App/jobs@2024-03-01' = {
@@ -173,7 +170,7 @@ resource bootstrapJob 'Microsoft.App/jobs@2024-03-01' = {
       }]
     }
   }
-  dependsOn: [acrRole, storageRole, vaultRole]
+  dependsOn: [acrPullAssignment, storageRole, vaultRole]
 }
 
 output jobName string = job.name

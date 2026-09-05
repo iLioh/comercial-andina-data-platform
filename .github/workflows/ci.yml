@@ -40,8 +40,10 @@ jobs:
       - name: Run tests
         run: pytest
 
-      - name: Validate CloudFormation
-        run: cfn-lint infra/cloudformation/*.yml
+      - name: Validate Bicep
+        run: |
+          az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+          az bicep build --file infra/bicep/job.bicep --stdout > /dev/null
 
       - name: Verify container build
         run: docker build --tag comercial-andina-etl:ci .

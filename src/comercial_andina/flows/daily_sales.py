@@ -14,7 +14,7 @@ from comercial_andina.etl.pipeline import (
     reconcile_batch,
     select_batch_id,
 )
-from comercial_andina.settings import AwsSettings
+from comercial_andina.settings import AzureSettings
 
 
 @task(name="01 - Preparar lote", retries=0)
@@ -24,8 +24,8 @@ def prepare_batch(batch_id: str | None = None) -> str:
     return select_batch_id(batch_id)
 
 
-@task(name="02 - Extraer RDS y persistir RAW", retries=2, retry_delay_seconds=30)
-def extract_raw(settings: AwsSettings, batch_id: str) -> dict[str, str | int]:
+@task(name="02 - Extraer PostgreSQL y persistir RAW", retries=2, retry_delay_seconds=30)
+def extract_raw(settings: AzureSettings, batch_id: str) -> dict[str, str | int]:
     """Extract the operational source and durably preserve it before transformation."""
 
     result = extract_and_persist_raw(settings, batch_id)
@@ -39,21 +39,21 @@ def extract_raw(settings: AwsSettings, batch_id: str) -> dict[str, str | int]:
 
 
 @task(name="03 - Cargar Staging", retries=2, retry_delay_seconds=30)
-def stage_raw(settings: AwsSettings, batch_id: str, raw_uri: str) -> None:
-    """Load the immutable source copy into the Redshift validation workspace."""
+def stage_raw(settings: AzureSettings, batch_id: str, raw_uri: str) -> None:
+    """Load the immutable source copy into the Azure SQL validation workspace."""
 
     load_staging(settings, batch_id, raw_uri)
 
 
 @task(name="04 - Validar y publicar Data Warehouse", retries=1, retry_delay_seconds=60)
-def publish_warehouse(settings: AwsSettings, batch_id: str) -> None:
+def publish_warehouse(settings: AzureSettings, batch_id: str) -> None:
     """Apply DQ rules, quarantine invalid rows and publish valid dimensional data."""
 
     process_quality_and_warehouse(settings, batch_id)
 
 
 @task(name="05 - Exportar cuarentena", retries=2, retry_delay_seconds=30)
-def persist_quarantine(settings: AwsSettings, batch_id: str, date_prefix: str) -> str:
+def persist_quarantine(settings: AzureSettings, batch_id: str, date_prefix: str) -> str:
     """Store rejected records and their failed rules outside the warehouse."""
 
     return export_quarantine(settings, batch_id, date_prefix)
@@ -61,7 +61,7 @@ def persist_quarantine(settings: AwsSettings, batch_id: str, date_prefix: str) -
 
 @task(name="06 - Conciliar y auditar", retries=1, retry_delay_seconds=30)
 def verify_reconciliation(
-    settings: AwsSettings,
+    settings: AzureSettings,
     batch_id: str,
     expected_source_count: int,
 ) -> dict[str, Any]:
@@ -83,7 +83,7 @@ def verify_reconciliation(
 def daily_sales_flow(batch_id: str | None = None) -> dict[str, Any]:
     """Orchestrate one visible, traceable and reconciled D+1 sales batch."""
 
-    settings = AwsSettings.from_environment()
+    settings = AzureSettings.from_environment()
     selected_batch = prepare_batch(batch_id)
     raw = extract_raw(settings, selected_batch)
     stage_raw(settings, selected_batch, str(raw["raw_uri"]))

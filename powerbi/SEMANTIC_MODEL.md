@@ -1,6 +1,6 @@
 # Modelo semántico y dashboard de Power BI
 
-Power BI se conectará a Amazon Redshift Serverless en modo **Import**. Solo se
+Power BI se conectará a Azure SQL Database en modo **Import**. Solo se
 importarán las vistas del esquema `analytics`; las capas RAW, Staging, auditoría y
 las tablas internas del DW no se exponen al reporte.
 

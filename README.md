@@ -3,51 +3,53 @@
 Plataforma analítica de ventas basada en Data Warehousing, calidad de datos, ETL,
 consultas OLAP y Power BI para Comercial Andina S.A.
 
-La solución implementa una PoC trazable sobre AWS. Conserva exactamente el alcance
-académico de `ventas_origen`, `GROUP BY`, `ROLLUP`, `CUBE` y Power BI, y lo amplía
-con patrones profesionales: RAW inmutable, manifiestos, cuarentena, reconciliación,
-orquestación, infraestructura como código, seguridad y CI/CD.
+La PoC implementa en Microsoft Azure el alcance completo del laboratorio y lo amplía
+con trazabilidad, RAW inmutable, cuarentena, reconciliación, Prefect, infraestructura
+como código, observabilidad, seguridad y CI/CD sin almacenar credenciales en GitHub.
 
-## Flujo definitivo
+## Arquitectura definitiva
 
 ```mermaid
 flowchart TB
-    RDS["RDS PostgreSQL<br/>ventas_origen"] --> ETL["Python + Prefect<br/>ECS Fargate"]
-    ETL --> RAW["S3<br/>RAW + manifiesto"]
-    RAW --> STG["Redshift<br/>Staging"]
+    SRC["POS · E-commerce · ERP<br/>contexto conceptual"] --> PG["Azure PostgreSQL<br/>oltp.ventas_origen"]
+    PG --> ETL["Container Apps Job<br/>Python + Prefect"]
+    ETL --> RAW["ADLS Gen2<br/>RAW + manifiestos"]
+    RAW --> STG["Azure SQL<br/>Staging"]
     STG --> DQ{"Data Quality"}
     DQ -->|Válidos| DW["Data Warehouse<br/>esquema estrella"]
-    DQ -->|Inválidos| QUAR["Auditoría +<br/>S3 Quarantine"]
-    DW --> OLAP["OLAP +<br/>modelo semántico"]
-    OLAP --> PBI["Power BI"]
+    DQ -->|Inválidos| QUAR["Auditoría +<br/>Quarantine"]
+    DW --> OLAP["GROUP BY · ROLLUP · CUBE<br/>GROUPING SETS · GROUPING_ID"]
+    OLAP --> PBI["Power BI<br/>KPIs + RLS"]
 ```
 
-IAM, KMS, Secrets Manager, CloudWatch, GitHub Actions y las tablas de auditoría
-actúan como controles transversales. POS, e-commerce y ERP forman parte del contexto
-de negocio; el alcance técnico evaluado comienza en `oltp.ventas_origen`.
+Microsoft Entra ID, Azure RBAC, Managed Identity, Key Vault, Azure Monitor,
+Log Analytics, GitHub Actions y las tablas de auditoría actúan transversalmente.
+El alcance técnico evaluado comienza en `oltp.ventas_origen`; POS, e-commerce y ERP
+explican su origen empresarial.
 
-## Alcance de la PoC
+## Alcance verificable
 
-| Elemento | Definición |
+| Elemento | Implementación |
 |---|---|
-| Fuente oficial | `oltp.ventas_origen` en Amazon RDS for PostgreSQL |
-| Datos | 10 000 ventas sintéticas reproducibles |
+| Fuente | Azure Database for PostgreSQL, siete campos exactos del laboratorio |
+| Dataset | 10 000 ventas sintéticas reproducibles |
 | Cobertura | 20 productos, 5 categorías, 5 regiones y 3 años |
-| Frecuencia | Lote diario D+1, zona `America/Lima` |
-| Calidad | 8 reglas y 20 rechazos controlados |
-| RAW | CSV, manifiesto, checksum SHA-256 y metadatos en S3 |
-| DW | `dim_fecha`, `dim_producto`, `dim_region`, `fact_ventas` |
+| Calidad | 8 reglas y 20 registros inválidos controlados |
+| Trazabilidad | `batch_id`, manifiesto, SHA-256 y timestamps |
+| Lake | ADLS Gen2 con contenedores `raw`, `manifests` y `quarantine` |
+| DW | Azure SQL: `dim_fecha`, `dim_producto`, `dim_region`, `fact_ventas` |
 | OLAP | `GROUP BY`, `ROLLUP`, `CUBE`, `GROUPING SETS`, `GROUPING_ID` |
+| Orquestación | Prefect con seis tareas, estados, logs y reintentos |
 | Consumo | Power BI Import, KPIs, tres visuales obligatorios y RLS |
-| Orquestación | Prefect con seis tareas observables y reintentos por etapa |
+| Automatización | Bicep + GitHub Actions + OIDC sin claves permanentes |
 
 ## Cumplimiento del laboratorio
 
-| Requisito | Implementación |
+| Requisito | Evidencia versionada |
 |---|---|
-| Fuente con siete campos | `sql/rds/01_create_source.sql` y contrato JSON |
-| Calcular `total_venta` | procedimiento `etl.sp_procesar_lote` |
-| Validar cantidad y precio > 0 | reglas `DQ-005` y `DQ-006` |
+| Crear y poblar `ventas_origen` | `sql/postgres/` y generador Python |
+| Calcular `total_venta` | `etl.sp_procesar_lote` |
+| Validar cantidad y precio positivos | reglas `DQ-005` y `DQ-006` |
 | `GROUP BY` | `sql/olap/01_*` y `02_*` |
 | `ROLLUP(region, producto)` | `sql/olap/03_rollup_region_product.sql` |
 | `CUBE(region, categoria, mes)` | `sql/olap/04_cube_region_category_month.sql` |
@@ -57,24 +59,21 @@ de negocio; el alcance técnico evaluado comienza en `oltp.ventas_origen`.
 
 ```text
 .
-├── .github/                 CI, CodeQL, Dependabot y gobierno de PR
-├── config/                  contrato y catálogos maestros
-├── infra/cloudformation/    red, datos y cómputo AWS
-├── powerbi/                 especificación semántica, DAX y RLS
+├── .github/                 CI, CodeQL, Dependabot y despliegue Azure
+├── config/                  Data Contract y catálogos maestros
+├── infra/bicep/             plataforma y Container Apps Jobs
+├── powerbi/                 modelo semántico, DAX, páginas y RLS
 ├── sql/
-│   ├── rds/                 fuente operacional
-│   ├── redshift/            staging, DQ, DW, auditoría y vistas
+│   ├── postgres/            fuente operacional consolidada
+│   ├── azure_sql/           Staging, DQ, DW, auditoría y vistas
 │   └── olap/                consultas obligatorias y adicionales
-├── src/comercial_andina/    generador, ETL, AWS y flujo Prefect
+├── src/comercial_andina/    generador, ETL, Azure y flujo Prefect
 ├── tests/                   contrato, datos, seguridad y regresión
 ├── DEPLOYMENT.md            implementación y evidencias paso a paso
-├── Dockerfile               imagen del worker
-└── prefect.yaml             despliegue y horario D+1
+└── Dockerfile               imagen no-root del pipeline
 ```
 
-## Inicio local
-
-Se requiere Python 3.11 o superior.
+## Desarrollo local
 
 ```bash
 python -m venv .venv
@@ -83,42 +82,19 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ruff check .
 pytest
-comercial-andina generate
-```
-
-En Windows PowerShell, activar con `.\.venv\Scripts\Activate.ps1`. En Git Bash,
-usar `source .venv/Scripts/activate`.
-
-## Comandos principales
-
-```bash
-# Generar el dataset y su manifiesto
 comercial-andina generate --records 10000
-
-# Crear/cargar la fuente privada RDS
-comercial-andina load-rds --host HOST --secret-arn ARN
-
-# Construir objetos de Redshift
-comercial-andina bootstrap-redshift --workgroup WORKGROUP --secret-arn ARN
-
-# Ejecutar un lote end-to-end usando variables de entorno
-comercial-andina run-pipeline --batch-id BATCH-20260901-001
 ```
 
-La guía completa está en [DEPLOYMENT.md](DEPLOYMENT.md).
+En PowerShell, la activación es `.\.venv\Scripts\Activate.ps1`; en Git Bash,
+`source .venv/Scripts/activate`.
 
-## Gobierno y seguridad
+## Seguridad y límites
 
-- Ninguna contraseña, API key, archivo `.env` o credencial AWS se versiona.
-- Los despliegues AWS son manuales, usan OIDC y credenciales temporales.
-- RDS y Redshift son privados; S3 bloquea acceso público y cifra con KMS.
-- Todo cambio entra mediante Pull Request y debe superar lint, pruebas,
-  CloudFormation lint, build del contenedor y CodeQL.
-- La PoC usa datos ficticios y no constituye una plataforma bancaria certificada.
+- No se versionan contraseñas, API keys, tokens, archivos `.env` ni datos generados.
+- GitHub Actions usa OIDC y credenciales temporales de Azure.
+- Las cargas usan TLS, Key Vault, RBAC y Managed Identity.
+- ADLS bloquea acceso anónimo y usa autenticación Entra ID.
+- La PoC contiene exclusivamente datos ficticios y no es una plataforma bancaria
+  productiva; la evolución enterprise incorpora Private Endpoints y redes privadas.
 
-## Qué no se almacena en GitHub
-
-El repositorio contiene todo el material reproducible. No contiene secretos, el CSV
-generado, capturas con datos sensibles ni el archivo binario `.pbix`. El `.pbix` se
-crea en Power BI Desktop siguiendo la especificación versionada y se conserva como
-evidencia académica fuera del control de código.
+La ejecución completa y las evidencias se describen en [DEPLOYMENT.md](DEPLOYMENT.md).

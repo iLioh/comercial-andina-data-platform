@@ -1,178 +1,110 @@
-# Guía de implementación controlada
+# Despliegue Azure y evidencias
 
-Esta guía lleva el repositorio desde una estación de trabajo limpia hasta la PoC
-desplegada. La ejecución crea recursos con costo; por ese motivo el despliegue es
-manual mediante `workflow_dispatch` y no ocurre automáticamente al fusionar código.
+## 1. Prerrequisitos
 
-## 1. Requisitos
+- Suscripción Azure for Students activa y presupuesto configurado.
+- Grupo `rg-comercial-andina-dev` en `chilecentral`.
+- Azure CLI, Git, Python 3.11+ y Power BI Desktop.
+- Workspace gratuito de Prefect Cloud.
+- ACR y Log Analytics existentes reutilizados para reducir tiempo y costo.
 
-- Cuenta AWS con permisos para CloudFormation, VPC, RDS, S3, KMS, Redshift
-  Serverless, ECR, ECS, IAM, Secrets Manager y CloudWatch.
-- AWS CLI v2, Git, Docker y Python 3.11 o superior.
-- Workspace de Prefect Cloud.
-- Power BI Desktop y una licencia/tenant compatible con publicación y RLS.
-
-Trabajar inicialmente en `us-east-1`, que es la región definida para la PoC.
-
-## 2. Preparar y validar localmente
+## 2. Validación local
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev,aws,orchestration]"
+python -m pip install -e ".[dev]"
 ruff check .
 pytest
-cfn-lint infra/cloudformation/*.yml
+docker build --tag comercial-andina-etl:local .
 ```
 
-En PowerShell, la activación del entorno es:
+## 3. Federación GitHub → Azure
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+Desde Azure Cloud Shell, ejecutar `scripts/configure_github_oidc.sh`. El script crea
+o reutiliza `id-github-comercial-andina-dev`, asigna únicamente los roles necesarios
+y configura una credencial federada limitada al repositorio y ambiente `dev`. No
+genera Client Secret.
 
-## 3. Preparar autenticación GitHub → AWS
+Configurar en GitHub **Settings → Environments → dev → Variables**:
 
-GitHub Actions utiliza OIDC; no se deben crear secretos `AWS_ACCESS_KEY_ID` ni
-`AWS_SECRET_ACCESS_KEY`. Debido a que este repositorio fue creado después del 15 de
-julio de 2026, su claim `sub` contiene los identificadores numéricos inmutables del
-propietario y del repositorio. Antes de crear la relación de confianza en IAM:
-
-1. Abrir **Settings → Actions → OpenID Connect** en GitHub.
-2. Copiar el subject claim exacto del entorno `dev`.
-3. Crear en IAM el proveedor `https://token.actions.githubusercontent.com` con
-   audience `sts.amazonaws.com`.
-4. Crear un rol de despliegue cuya confianza compare de forma exacta `aud` y `sub`.
-5. Limitar el rol a los stacks `comercial-andina-*`, ECR y `iam:PassRole` solo para
-   los roles de esta PoC.
-
-Configurar un Environment protegido llamado `dev` y estas variables:
-
-| Variable de GitHub | Contenido |
+| Variable | Valor |
 |---|---|
-| `AWS_DEPLOY_ROLE_ARN` | ARN del rol federado de despliegue |
-| `AWS_REGION` | `us-east-1` |
-| `PREFECT_API_KEY_SECRET_ARN` | ARN del secreto que contiene solo la API key |
+| `AZURE_CLIENT_ID` | salida del script OIDC |
+| `AZURE_TENANT_ID` | salida del script OIDC |
+| `AZURE_SUBSCRIPTION_ID` | salida del script OIDC |
+| `DEPLOYER_PRINCIPAL_ID` | salida del script OIDC |
+| `AZURE_RESOURCE_GROUP` | `rg-comercial-andina-dev` |
+| `AZURE_LOCATION` | `chilecentral` |
+| `AZURE_ACR_NAME` | `acrbancoandino84621` |
+| `AZURE_ACR_RESOURCE_GROUP` | `rg-banco-andino-cicd` |
+| `LOG_ANALYTICS_WORKSPACE` | `workspace-rgbancoandinocicd37iy` |
+| `LOG_ANALYTICS_RESOURCE_GROUP` | `rg-banco-andino-cicd` |
 
-Para un entorno regulado real, requerir aprobación manual del Environment, dos
-revisores del Pull Request y separación de roles entre despliegue y operación.
+Configurar como **Environment secrets**:
 
-## 4. Desplegar AWS mediante GitHub Actions
+- `POSTGRES_ADMIN_PASSWORD`: contraseña única de al menos 16 caracteres.
+- `SQL_ADMIN_PASSWORD`: contraseña distinta de al menos 16 caracteres.
+- `PREFECT_API_KEY`: API key creada en Prefect Cloud.
 
-1. Abrir **Actions → Deploy AWS PoC → Run workflow**.
-2. Elegir `dev`.
-3. Indicar la URL del workspace de Prefect Cloud.
-4. Revisar el plan y ejecutar.
+No mostrar ni guardar estos valores fuera de los almacenes cifrados.
 
-El workflow crea en orden:
+## 4. Despliegue automatizado
 
-1. VPC, dos subredes privadas, dos públicas, S3 endpoint y NAT Gateway.
-2. KMS, S3, RDS PostgreSQL privado y Redshift Serverless privado.
-3. ECR, imagen Docker inmutable, ECS Fargate y worker de Prefect.
+1. Integrar la rama Azure mediante Pull Request con CI exitoso.
+2. Abrir **Actions → Deploy Azure PoC → Run workflow**.
+3. Seleccionar `dev` e ingresar el API URL del workspace de Prefect.
+4. El workflow despliega ADLS, Key Vault, PostgreSQL, Azure SQL y Container Apps Jobs.
+5. Luego construye la imagen en ACR e inicia el job de bootstrap.
 
-Los stacks resultantes son:
+## 5. Inicialización y primer pipeline
 
-- `comercial-andina-dev-network`;
-- `comercial-andina-dev-data`;
-- `comercial-andina-dev-compute`.
-
-> El NAT Gateway, RDS, Redshift Serverless y ECS generan costo mientras están
-> activos. Etiquetar, monitorear presupuesto y eliminar la PoC cuando termine la
-> evaluación.
-
-## 5. Crear el dataset y cargar RDS
-
-Obtener de los outputs de CloudFormation `RdsEndpoint` y `RdsSecretArn`.
+Comprobar la ejecución de bootstrap:
 
 ```bash
-comercial-andina generate \
-  --records 10000 \
-  --batch-id BATCH-20260901-001
-
-comercial-andina load-rds \
-  --host RDS_ENDPOINT \
-  --secret-arn RDS_SECRET_ARN \
-  --region us-east-1
+az containerapp job execution list \
+  --name caj-comercial-andina-bootstrap-dev \
+  --resource-group rg-comercial-andina-dev \
+  --output table
 ```
 
-El CSV generado no se versiona. Contiene exactamente las siete columnas del
-laboratorio y veinte ventas inválidas controladas para demostrar calidad.
-
-La conexión directa a RDS requiere ejecutarse desde la VPC (por ejemplo mediante
-una tarea ECS controlada o una sesión administrativa). RDS no debe hacerse público
-para simplificar una carga.
-
-## 6. Inicializar Redshift
-
-Obtener `RedshiftWorkgroup` y `RedshiftSecretArn` y ejecutar:
+Iniciar el pipeline principal:
 
 ```bash
-comercial-andina bootstrap-redshift \
-  --workgroup comercial-andina-dev \
-  --secret-arn REDSHIFT_SECRET_ARN \
-  --database comercial_andina_dw \
-  --region us-east-1
+az containerapp job start \
+  --name caj-comercial-andina-etl-dev \
+  --resource-group rg-comercial-andina-dev
 ```
 
-Los scripts se aplican en orden numérico: schemas, tablas, catálogos, procedimiento
-ETL y vistas analíticas.
+El flujo visible en Prefect debe mostrar seis tareas exitosas y la reconciliación:
+10 000 registros origen = 9 980 válidos + 20 rechazados.
 
-## 7. Registrar y programar el flujo Prefect
+## 6. Validaciones y OLAP
 
-Crear un work pool de tipo `process` llamado `comercial-andina-ecs`. Desde el
-contenedor o una estación autenticada en el mismo workspace:
+En Azure SQL consultar `audit.etl_control`, `audit.dq_rechazos`, las tres dimensiones
+y `dw.fact_ventas`. Ejecutar en orden los scripts `sql/olap/01` a `05` y conservar
+resultados de `GROUP BY`, `ROLLUP`, `CUBE`, `GROUPING SETS` y `GROUPING_ID`.
 
-```bash
-prefect work-pool create --type process comercial-andina-ecs
-prefect work-pool set-concurrency-limit comercial-andina-ecs 1
-prefect deploy --all
-```
+## 7. Power BI
 
-La programación definida en `prefect.yaml` ejecuta el lote a las 06:00 de
-`America/Lima`. Para una prueba controlada:
+Conectar Power BI Desktop a `analytics.vw_ventas_analiticas` en modo Import. Crear
+las medidas, relaciones, tres páginas y RLS descritas en `powerbi/SEMANTIC_MODEL.md`.
 
-```bash
-comercial-andina run-pipeline --batch-id BATCH-20260901-001
-```
+## 8. Evidencias mínimas
 
-## 8. Verificar la publicación
+- Pull Request y CI exitoso.
+- Recursos Azure y despliegue Bicep exitoso.
+- RAW, manifiesto y cuarentena en ADLS.
+- Flujo Prefect con seis tareas.
+- Reconciliación 10 000 = 9 980 + 20.
+- Dimensiones y tabla de hechos cargadas.
+- Cinco consultas OLAP y su interpretación.
+- Dashboard Power BI y prueba de RLS.
+- Azure Monitor/Log Analytics y ejecución del Container Apps Job.
 
-```sql
-SELECT * FROM audit.etl_control ORDER BY fecha_inicio DESC;
-SELECT * FROM audit.dq_rechazos ORDER BY fecha_rechazo DESC;
-SELECT COUNT(*) FROM dw.fact_ventas;
-SELECT SUM(total_venta) FROM dw.fact_ventas;
-```
+## 9. Control de costos
 
-El lote de demostración debe mostrar 10 000 filas de origen, 20 registros
-rechazados y 9 980 registros válidos/publicados. El conteo válido debe coincidir con
-el publicado y el importe publicado debe coincidir con la suma de `fact_ventas`.
-
-Ejecutar después todos los archivos de `sql/olap` y conservar resultados como
-evidencia de `GROUP BY`, `ROLLUP`, `CUBE`, `GROUPING SETS` y `GROUPING_ID`.
-
-## 9. Construir Power BI
-
-Seguir `powerbi/SEMANTIC_MODEL.md`. Conectar únicamente al esquema `analytics` de
-Redshift, crear las relaciones, medidas, tres visuales obligatorios y RLS. Publicar
-el reporte y configurar la actualización después del lote D+1.
-
-## 10. Evidencias de cierre
-
-- Pull Request aprobado y checks de CI/CodeQL correctos.
-- Stacks de CloudFormation en estado estable.
-- Ejecución Prefect exitosa y reintentos visibles.
-- Objeto CSV y manifiesto en S3 RAW.
-- Rechazos en `audit.dq_rechazos` y S3 Quarantine.
-- Conciliación exitosa en `audit.etl_control`.
-- Resultados de todas las consultas OLAP.
-- Dashboard, actualización y pruebas RLS de Power BI.
-- Capturas sin ARNs completos, cuentas, correos reales ni secretos.
-
-## 11. Desmantelamiento de la PoC
-
-Exportar primero las evidencias permitidas. Eliminar en orden compute, data y
-network. S3 y los snapshots se conservan deliberadamente por las políticas
-`Retain`/`Snapshot`; su eliminación final debe ser una decisión explícita del
-responsable, nunca un paso automático del pipeline.
+La base Azure SQL se auto-pausa tras 60 minutos sin actividad y Container Apps Jobs
+solo ejecuta por lote. Al concluir la exposición, exportar evidencias y eliminar
+`rg-comercial-andina-dev` para detener los cargos de la PoC. El ACR y Log Analytics
+compartidos pertenecen a otro grupo y no se eliminan con esta operación.
